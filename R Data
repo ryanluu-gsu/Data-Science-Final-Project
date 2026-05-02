@@ -1,0 +1,323 @@
+tuition <- read.csv("tuition_cost.csv")
+salary <- read.csv("salary_potential.csv")
+diversity <- read.csv("student_diversity.csv")
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(tidyr)
+
+#Cleaning data
+clean_names <- function(names_vec) {
+  states <- c("Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", 
+              "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho", 
+              "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", 
+              "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", 
+              "Mississippi", "Missouri", "Montana", "Nebraska", "Nevada", 
+              "New Hampshire", "New Jersey", "New Mexico", "New York", 
+              "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", 
+              "Pennsylvania", "Rhode Island", "South Carolina", "South Dakota", 
+              "Tennessee", "Texas", "Utah", "Vermont", "Virginia", "Washington", 
+              "West Virginia", "Wisconsin", "Wyoming")
+  
+  for (i in seq_along(names_vec)) {
+    for (state in states) {
+      if (grepl(paste0(state, "$"), names_vec[i])) {
+        names_vec[i] <- sub(paste0(state, "$"), "", names_vec[i])
+        names_vec[i] <- trimws(names_vec[i])
+        break
+      }
+    }
+  }
+  names_vec <- gsub("U\\.", "University", names_vec)
+  names_vec <- gsub("U$", "University", names_vec)
+  names_vec <- gsub("\\s+", " ", names_vec)
+  names_vec <- trimws(names_vec)
+  
+  return(names_vec)
+}
+
+clean_data <- function(names_vec) {
+  names_vec <- gsub("-Main Campus$", "", names_vec)
+}
+
+diversity$name <- clean_names(diversity$INSTITUTION)
+salary$name <- clean_data(salary$name)
+
+#Merging data sets
+merged_project <- salary %>%
+  inner_join(diversity, by = "name") %>%
+  inner_join(tuition, by = "name")
+
+#Removed extra columns and obs with no data
+project <- merged_project %>%
+  select(-INSTITUTION, -state_code, -state) %>%
+  na.omit %>%
+  mutate(
+    ENROLLMENT = as.numeric(gsub(",","",ENROLLMENT)),
+    WOMEN = as.numeric(gsub(",", "", WOMEN)),
+    TOTAL.MINORITY = as.numeric(gsub(",", "", TOTAL.MINORITY)),
+    MEN = ENROLLMENT - WOMEN,
+    pct_women = (WOMEN/ENROLLMENT)*100,
+    pct_men = (MEN/ENROLLMENT)*100,
+    pct_minority = (TOTAL.MINORITY/ENROLLMENT)*100
+  )
+
+# Top 5 universities in pay
+top_5_universities <- project %>%
+  arrange(desc(mid_career_pay)) %>%
+  slice_head(n = 5) %>%
+  mutate(salary_rank = "Top 5")
+
+# Bottom 5 universities in pay
+bottom_5_universities <- project %>%
+  arrange(mid_career_pay) %>%
+  slice_head(n = 5) %>%
+  mutate(salary_rank = "Bottom 5")
+
+# Combine for analysis
+comparison_5 <- bind_rows(top_5_universities, bottom_5_universities)
+# Top 5 universities in pay
+top_5_universities <- project %>%
+  arrange(desc(mid_career_pay)) %>%
+  slice_head(n = 5) %>%
+  mutate(salary_rank = "Top 5")
+
+# Bottom 5 universities in pay
+bottom_5_universities <- project %>%
+  arrange(mid_career_pay) %>%
+  slice_head(n = 5) %>%
+  mutate(salary_rank = "Bottom 5")
+
+# Combine for comparison
+comparison_5 <- bind_rows(top_5_universities, bottom_5_universities)
+comparison_5 <- comparison_5 %>%
+  mutate(
+    mid_career_pay_actual = mid_career_pay * 1000,
+    clean_name = case_when(
+      grepl("Massachusetts Institute", name) ~ "MIT",
+      grepl("Harvard", name) ~ "Harvard",
+      grepl("Alabama College", name) ~ "Alabama College of Art",
+      grepl("Colorado School", name) ~ "Colorado School of Mines",
+      grepl("Carnegie Mellon", name) ~ "Carnegie Mellon",
+      grepl("University of Science", name) ~ "Univ. of Science & Arts (OK)",
+      grepl("Minnesota at Crookston", name) ~ "UMN Crookston",
+      grepl("Lindsey", name) ~ "Lindsey University",
+      grepl("Mississippi Valley", name) ~ "Mississippi Valley State",
+      TRUE ~ strtrim(name, 20)
+    ),
+    salary_label = paste0("$", mid_career_pay, "K")
+  )
+
+# Combine top and bottom universities
+ggplot(comparison_5, aes(x = reorder(clean_name, mid_career_pay), 
+                         y = mid_career_pay, 
+                         fill = salary_rank)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = salary_label), 
+            hjust = -0.2, 
+            size = 3,
+            fontface = "bold") +
+  coord_flip(clip = "off") +
+  facet_wrap(~salary_rank, scales = "free_y", ncol = 1) +
+  labs(
+    title = "Mid-Career Salaries: Top 5 vs Bottom 5 Universities",
+    subtitle = "Comparing highest and lowest paying institutions",
+    x = "",
+    y = "Salary (in thousands $)"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Top 5" = "#2E7D32", "Bottom 5" = "#C62828")) +
+  scale_y_continuous(
+    limits = c(0, max(comparison_5$mid_career_pay) * 1.15),
+    breaks = seq(0, 160, by = 20),
+    labels = function(x) paste0("$", x, "K"),
+    expand = expansion(mult = c(0.01, 0.1))
+  ) +
+  theme(
+    strip.text = element_text(size = 10, face = "bold", margin = margin(b = 10)),
+    axis.text.y = element_text(size = 8, face = "bold"),
+    axis.text.x = element_text(size = 8),
+    axis.title.x = element_text(size = 12),
+    plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray50"),
+    legend.position = "none",
+    panel.spacing = unit(2, "lines"),
+    plot.margin = unit(c(0.5, 2.5, 0.5, 0.5), "cm")
+  )
+
+#Top universities in pay for demographic comparison
+top_10_universities <- project %>%
+  arrange(desc(mid_career_pay)) %>%
+  slice_head(n = 10) %>%
+  mutate(salary_rank = "Top 10")
+
+#Bottom universities in pay for demographic comparison
+bottom_10_universities <- project %>%
+  arrange(mid_career_pay) %>%
+  slice_head(n = 10) %>%
+  mutate(salary_rank = "Bottom 10")
+
+#Combine for analysis for gender
+gender_comparison <- bind_rows(top_10_universities, bottom_10_universities)
+gender_summary <- gender_comparison %>%
+  group_by(salary_rank) %>%
+  summarise(
+    count = n(),
+    mean_pct_women = mean(pct_women),
+    median_pct_women = median(pct_women),
+    sd_pct_women = sd(pct_women),
+    mean_pct_men = mean(pct_men),
+    median_pct_men = median(pct_men),
+    mean_salary = mean(mid_career_pay),
+    women_dominated = sum(pct_women > 50),
+    men_dominated = sum(pct_men > 50)
+  )
+
+#Summary by gender pay
+summary_by_gender <- project %>%
+  summarise(
+    
+    #Count of schools
+    women_dominated_schools = sum(WOMEN > ENROLLMENT/2),
+    men_dominated_schools = sum(MEN > ENROLLMENT/2),
+    
+    #women stats (schools where women > 50%)
+    women_early_mean = mean(early_career_pay[WOMEN > ENROLLMENT/2]),
+    women_early_median = median(early_career_pay[WOMEN > ENROLLMENT/2]),
+    women_early_sd = sd(early_career_pay[WOMEN > ENROLLMENT/2]),
+    women_early_min = min(early_career_pay[WOMEN > ENROLLMENT/2]),
+    women_early_max = max(early_career_pay[WOMEN > ENROLLMENT/2]),
+    
+    women_mid_mean = mean(mid_career_pay[WOMEN > ENROLLMENT/2]),
+    women_mid_median = median(mid_career_pay[WOMEN > ENROLLMENT/2]),
+    women_mid_sd = sd(mid_career_pay[WOMEN > ENROLLMENT/2]),
+    women_mid_min = min(mid_career_pay[WOMEN > ENROLLMENT/2]),
+    women_mid_max = max(mid_career_pay[WOMEN > ENROLLMENT/2]),
+    
+    #men stats (schools where men > 50%)
+    men_early_mean = mean(early_career_pay[MEN > ENROLLMENT/2]),
+    men_early_median = median(early_career_pay[MEN > ENROLLMENT/2]),
+    men_early_sd = sd(early_career_pay[MEN > ENROLLMENT/2]),
+    men_early_min = min(early_career_pay[MEN > ENROLLMENT/2]),
+    men_early_max = max(early_career_pay[MEN > ENROLLMENT/2]),
+    
+    men_mid_mean = mean(mid_career_pay[MEN > ENROLLMENT/2]),
+    men_mid_median = median(mid_career_pay[MEN > ENROLLMENT/2]),
+    men_mid_sd = sd(mid_career_pay[MEN > ENROLLMENT/2]),
+    men_mid_min = min(mid_career_pay[MEN > ENROLLMENT/2]),
+    men_mid_max = max(mid_career_pay[MEN > ENROLLMENT/2]),
+  )
+
+#Cleaning Gender Pay data for plotting
+plot_data <- data.frame(
+  gender = rep(c("Women-Dominated", "Men-Dominated"), each = 2),
+  career_stage = rep(c("Early Career", "Mid Career"), 2),
+  mean_salary = c(
+    summary_by_gender$women_early_mean,
+    summary_by_gender$women_mid_mean,
+    summary_by_gender$men_early_mean,
+    summary_by_gender$men_mid_mean
+  ),
+  median_salary = c(
+    summary_by_gender$women_early_median,
+    summary_by_gender$women_mid_median,
+    summary_by_gender$men_early_median,
+    summary_by_gender$men_mid_median
+  ),
+  sd_salary = c(
+    summary_by_gender$women_early_sd,
+    summary_by_gender$women_mid_sd,
+    summary_by_gender$men_early_sd,
+    summary_by_gender$men_mid_sd
+  )
+)
+
+write.csv(summary_by_gender, "gender_pay_summary.csv")
+
+#Plotting Gender Pay
+ggplot(plot_data, aes(x = gender, y = mean_salary, fill = career_stage)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  
+  labs(
+    title = "Average Salaries: Women-Dominated vs Men-Dominated Schools",
+    x = "School Type",
+    y = "Average Salary ($)",
+    fill = "Career Stage"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Early Career" = "lightblue", "Mid Career" = "steelblue")) +
+  scale_y_continuous(labels = scales::dollar_format())
+
+# Create minority summary similar to your gender summary
+summary_by_minority <- project %>%
+  summarise(
+    # Count of schools
+    minority_dominated_schools = sum(pct_minority > 50),
+    white_dominated_schools = sum(pct_minority <= 50),
+    
+    # Minority-dominated stats (schools where minority > 50%)
+    minority_early_mean = mean(early_career_pay[pct_minority > 50]),
+    minority_early_median = median(early_career_pay[pct_minority > 50]),
+    minority_early_sd = sd(early_career_pay[pct_minority > 50]),
+    minority_early_min = min(early_career_pay[pct_minority > 50]),
+    minority_early_max = max(early_career_pay[pct_minority > 50]),
+    
+    minority_mid_mean = mean(mid_career_pay[pct_minority > 50]),
+    minority_mid_median = median(mid_career_pay[pct_minority > 50]),
+    minority_mid_sd = sd(mid_career_pay[pct_minority > 50]),
+    minority_mid_min = min(mid_career_pay[pct_minority > 50]),
+    minority_mid_max = max(mid_career_pay[pct_minority > 50]),
+    
+    # Majority-white stats (schools where minority <= 50%)
+    white_early_mean = mean(early_career_pay[pct_minority <= 50]),
+    white_early_median = median(early_career_pay[pct_minority <= 50]),
+    white_early_sd = sd(early_career_pay[pct_minority <= 50]),
+    white_early_min = min(early_career_pay[pct_minority <= 50]),
+    white_early_max = max(early_career_pay[pct_minority <= 50]),
+    
+    white_mid_mean = mean(mid_career_pay[pct_minority <= 50]),
+    white_mid_median = median(mid_career_pay[pct_minority <= 50]),
+    white_mid_sd = sd(mid_career_pay[pct_minority <= 50]),
+    white_mid_min = min(mid_career_pay[pct_minority <= 50]),
+    white_mid_max = max(mid_career_pay[pct_minority <= 50])
+  )
+
+write.csv(summary_by_minority, "minority_pay_summary.csv")
+
+#Combine for analysis for minorities
+minority_plot_data <- data.frame(
+  school_type = rep(c("Minority-Dominated", "Majority-White"), each = 2),
+  career_stage = rep(c("Early Career", "Mid Career"), 2),
+  mean_salary = c(
+    summary_by_minority$minority_early_mean,
+    summary_by_minority$minority_mid_mean,
+    summary_by_minority$white_early_mean,
+    summary_by_minority$white_mid_mean
+  ),
+  median_salary = c(
+    summary_by_minority$minority_early_median,
+    summary_by_minority$minority_mid_median,
+    summary_by_minority$white_early_median,
+    summary_by_minority$white_mid_median
+  ),
+  sd_salary = c(
+    summary_by_minority$minority_early_sd,
+    summary_by_minority$minority_mid_sd,
+    summary_by_minority$white_early_sd,
+    summary_by_minority$white_mid_sd
+  )
+)
+
+#Plotting Minority Pay
+ggplot(minority_plot_data, aes(x = school_type, y = mean_salary, fill = career_stage)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  labs(
+    title = "Average Salaries: Minority-Dominated vs Majority-White Schools",
+    subtitle = "Minority-Dominated = >50% minority students | Majority-White = ≤50% minority students",
+    x = "School Type",
+    y = "Average Salary ($)",
+    fill = "Career Stage"
+  ) +
+  theme_minimal() +
+  scale_fill_manual(values = c("Early Career" = "lightblue", "Mid Career" = "steelblue")) +
+  scale_y_continuous(labels = scales::dollar_format())
